@@ -10,12 +10,14 @@ import logging
 import logging.handlers
 import time
 import datetime
-import pickle
+import RPi.GPIO as GPIO
 
 # commands
 IO_WC_AMP = 0x01
 IO_BAD_AMP = 0x02
 IO_WC_LUEFTER = 0x04
+IO_GARTEN_LICHT = 0x08
+IO_GARTEN_STECKDOSE = 0x10
 
 #my_io = RPi_I2C_driver.i2c_device()
 
@@ -57,12 +59,14 @@ def on_connect(client, userdata, flags, rc):
     client.subscribe("io/wc_amp/#")
     client.subscribe("io/bad_amp/#")
     client.subscribe("io/wc_luefter/#")
-    client.subscribe("io/garten_mauerlicht/#")
-    client.subscribe("io/garten_steckdose/#")
+    client.subscribe("io/garten/mauerlicht/#")
+    client.subscribe("io/garten/steckdose/#")
     client.subscribe("io/wozi/sockel1/#")
     client.subscribe("io/wozi/sockel2/#")
     client.subscribe("io/wozi/sockel3/#")
     client.subscribe("io/wozi/sockel4/#")
+    client.subscribe("io/wozi/sockel5/#")
+    client.subscribe("io/wozi/sockel6/#")
 
 def on_message(client, userdata, msg):
     print(msg.topic + " " + str(msg.payload))
@@ -81,6 +85,10 @@ def on_message(client, userdata, msg):
         io(client, io_device_38, msg.payload, IO_WC_AMP)
     if io_topic == "wc_luefter":
         io(client, io_device_38, msg.payload, IO_WC_LUEFTER)
+    if io_topic == "mauerlicht":
+        io(client, io_device_38, msg.payload, IO_GARTEN_LICHT)
+    if io_topic == "steckdose":
+        io(client, io_device_38, msg.payload, IO_GARTEN_STECKDOSE)
     if io_topic == "sockel1":
         dimmer(client, io_device_10, msg.payload, 7)
     if io_topic == "sockel2":
@@ -89,6 +97,10 @@ def on_message(client, userdata, msg):
         dimmer(client, io_device_10, msg.payload, 9)
     if io_topic == "sockel4":
         dimmer(client, io_device_10, msg.payload, 10)
+    if io_topic == "sockel5":
+        dimmer(client, io_device_10, msg.payload, 6)
+    if io_topic == "sockel6":
+        dimmer(client, io_device_10, msg.payload, 11)
 
 
 def dimmer(client, device, do, channel):
@@ -114,6 +126,16 @@ def io(client, device, do, data):
     log.debug('I2C ID 38 Write: $%2X' % (io_out))
     l_out(client,20,3,'IIC 0x38: 0x%2X' % (io_out))
 
+def doIfLow(channel):
+    global client, device
+    io_in = device.read()
+    print("I2C Interrupt. 0x%02X gelesen" % (io_in))
+    if((io_in & 0x80) == 0):
+        client.publish("wc/licht/status", "ON")
+    else:
+        client.publish("wc/licht/status", "OFF")
+
+
 
 client = mqtt.Client()
 client.on_connect = on_connect
@@ -131,6 +153,14 @@ io_device_38 = RPi_I2C_driver.i2c_device(0x38)
 io_device_10 = RPi_I2C_driver.i2c_device(0x10) #Dimmer
 adc = Adafruit_ADS1x15.ADS1115()
 
+#GPIO Init
+# Zaehlweise der Pins festlegen
+GPIO.setmode(GPIO.BOARD)
+# Pin 18 (GPIO 24) als Eingang festlegen
+GPIO.setup(18, GPIO.IN, pull_up_down = GPIO.PUD_UP)
+GPIO.add_event_detect(18, GPIO.FALLING, callback=doIfLow, bouncetime=200)
+
+
 #client.loop_forever()
 client.loop_start()
 
@@ -139,19 +169,17 @@ while True:
     if(iUptimeLoop == 60/iLoopTime):
         iUptimeLoop=0
         iUptime=iUptime+1
-        now=datetime.datetime.now()
-        sNow="%d-%02d-%02dT%02d:%02d:%02d.000+01:00" % (now.year,now.month,now.day,now.hour,now.minute,now.second)
-        client.publish("net/health/keller01",sNow)
+        client.publish("net/health/keller01",iUptime)
         h, m = divmod(iUptime,60)
         d, h = divmod(h, 24)
         l_out(client,0,19,'UP:%03dd %02dh %02dm' % (d, h, m))
     time.sleep(iLoopTime)
-    print(iADC)
+    #print(iADC)
     iADC = [iADC[-1]] + iADC[:-1]
     iADC[0] = adc.read_adc(0,1)
-    print(iADC)
+    #print(iADC)
     iA=(2.5-(sum(iADC)/len(iADC))*(4.096/32767))*0.185
-    print(iA)
+    #print(iA)
     if(iADCValid<len(iADC)+1):
         iADCValid=iADCValid+1
     else:
